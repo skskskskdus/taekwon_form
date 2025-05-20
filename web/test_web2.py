@@ -15,8 +15,15 @@ import cv2
 import time
 from typing import Dict, List, Tuple
 import tempfile
-
+from matplotlib import font_manager #한글 폰트 추가
 import matplotlib.pyplot as plt
+
+# 한글 폰트 설정
+font_path = "C:/WINDOWS/Fonts/MALGUN.TTF"
+font_name = font_manager.FontProperties(fname=font_path).get_name()
+plt.rc('font', family=font_name)
+plt.rcParams['axes.unicode_minus'] = False
+
 # 포즈 오버레이 시각화 함수 추가
 def visualize_user_and_reference(
     img: np.ndarray,
