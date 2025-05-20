@@ -78,6 +78,116 @@ def plot_pose_overlay_with_title(overlay_img, pred_label, similarity_score):
     plt.tight_layout()
     return fig
 
+# 관절 각도 차이 분석 함수
+def plot_angle_deviation_heatmap(user_pts, ref_pts):
+    """주요 관절 각도 차이 히트맵"""
+    angles = [
+        (11, 13, 15, "왼쪽 팔꿈치"),
+        (12, 14, 16, "오른쪽 팔꿈치"),
+        (23, 25, 27, "왼쪽 무릎"),
+        (24, 26, 28, "오른쪽 무릎"),
+        (23, 11, 13, "왼쪽 어깨"),
+        (24, 12, 14, "오른쪽 어깨"),
+        (11, 23, 25, "왼쪽 엉덩이"),
+        (12, 24, 26, "오른쪽 엉덩이"),
+    ]
+    def calc_angle(p1, p2, p3):
+        v1 = p1 - p2
+        v2 = p3 - p2
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+        angle = np.arccos(np.clip(cos_angle, -1.0, 1.0)) * 180 / np.pi
+        return angle
+
+    angle_diffs = []
+    for a, b, c, name in angles:
+        try:
+            user_angle = calc_angle(user_pts[a], user_pts[b], user_pts[c])
+            ref_angle = calc_angle(ref_pts[a], ref_pts[b], ref_pts[c])
+            diff = abs(user_angle - ref_angle)
+            angle_diffs.append((name, user_angle, ref_angle, diff))
+        except:
+            angle_diffs.append((name, 0, 0, 180))
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    names = [a[0] for a in angle_diffs]
+    diffs = [a[3] for a in angle_diffs]
+    user_angles = [a[1] for a in angle_diffs]
+    ref_angles = [a[2] for a in angle_diffs]
+    colors = plt.cm.RdYlGn_r(np.array(diffs) / 180)
+    y_pos = np.arange(len(names))
+    ax.barh(y_pos, user_angles, height=0.4, color=colors, alpha=0.7, label='사용자')
+    ax.barh(y_pos + 0.4, ref_angles, height=0.4, color='lightgray', alpha=0.7, label='참조')
+    for i, (diff, user_angle) in enumerate(zip(diffs, user_angles)):
+        ax.text(user_angle + 5, i, f"{diff:.1f}°", va='center')
+    ax.set_yticks(y_pos + 0.2)
+    ax.set_yticklabels(names)
+    ax.invert_yaxis()
+    ax.set_xlabel('각도 (도)')
+    ax.set_title('관절 각도 비교')
+    ax.legend()
+    max_diff_idx = np.argmax(diffs)
+    fig.text(0.5, 0.02, 
+             f"가장 큰 차이: {names[max_diff_idx]} ({diffs[max_diff_idx]:.1f}°)", 
+             ha='center', fontsize=12, bbox=dict(boxstyle="round,pad=0.5", fc="mistyrose"))
+    plt.tight_layout(rect=[0, 0.05, 1, 0.95])
+    return fig
+
+# 팔다리 대칭성 분석 함수
+def plot_symmetry_analysis(user_pts):
+    """좌우 대칭성 분석"""
+    symmetry_pairs = [
+        (11, 12, "어깨"),
+        (13, 14, "팔꿈치"),
+        (15, 16, "손목"),
+        (23, 24, "엉덩이"),
+        (25, 26, "무릎"),
+        (27, 28, "발목")
+    ]
+    neck = (user_pts[11] + user_pts[12]) / 2
+    pelvis = (user_pts[23] + user_pts[24]) / 2
+    midline = np.array([neck, pelvis])
+    symmetry_scores = []
+    for left_idx, right_idx, name in symmetry_pairs:
+        left_pt = user_pts[left_idx]
+        right_pt = user_pts[right_idx]
+        y_diff = abs(left_pt[1] - right_pt[1])
+        body_height = abs(neck[1] - pelvis[1])
+        norm_diff = y_diff / (body_height + 1e-8)
+        sym_score = 1 - min(1.0, norm_diff * 5)
+        symmetry_scores.append((name, sym_score, y_diff))
+    overall_symmetry = sum([s[1] for s in symmetry_scores]) / len(symmetry_scores)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    # 스켈레톤
+    for i, j in POSE_CONNECTIONS:
+        if i < len(user_pts) and j < len(user_pts):
+            ax1.plot([user_pts[i][0], user_pts[j][0]], [user_pts[i][1], user_pts[j][1]], 'b-')
+    ax1.plot([midline[0][0], midline[1][0]], [midline[0][1], midline[1][1]], 'r--', linewidth=2)
+    for left_idx, right_idx, name in symmetry_pairs:
+        left_pt = user_pts[left_idx]
+        right_pt = user_pts[right_idx]
+        score = next((s[1] for s in symmetry_scores if s[0] == name))
+        color = plt.cm.RdYlGn(score)
+        ax1.scatter(left_pt[0], left_pt[1], color=color, s=50)
+        ax1.scatter(right_pt[0], right_pt[1], color=color, s=50)
+        ax1.plot([left_pt[0], right_pt[0]], [left_pt[1], right_pt[1]], color=color, linestyle=':', alpha=0.7)
+    ax1.set_aspect('equal')
+    ax1.axis('off')
+    ax1.set_title("포즈 대칭성 분석")
+    # 바 차트
+    names = [s[0] for s in symmetry_scores]
+    scores = [s[1] * 100 for s in symmetry_scores]
+    bars = ax2.barh(names, scores, color=[plt.cm.RdYlGn(s) for s in [s[1] for s in symmetry_scores]])
+    ax2.set_xlim(0, 100)
+    ax2.set_xlabel('대칭성 점수 (%)')
+    ax2.set_title('관절별 좌우 대칭성')
+    for i, v in enumerate(scores):
+        ax2.text(v + 1, i, f"{v:.1f}%", va='center')
+    fig.text(0.5, 0.02, 
+             f"전체 대칭성 점수: {overall_symmetry * 100:.1f}%", 
+             ha='center', fontsize=14, 
+             bbox=dict(boxstyle="round,pad=0.5", fc=plt.cm.RdYlGn(overall_symmetry)))
+    plt.tight_layout(rect=[0, 0.05, 1, 0.95])
+    return fig
 # ╭─────────────────────────────────────────────────────────╮
 # │  RuntimeError("Tried to instantiate class '__path__._path' …")  │
 # ╰─────────────────────────────────────────────────────────╯
@@ -111,7 +221,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 # ────────────────────────────────────────────────────────────────
 st.set_page_config(layout="wide", initial_sidebar_state="expanded")
 
-st.title("🥋 태권도 품새 유사도 분석 (Optimized)")
+st.title("🥋 태권도 품새 유사도 분석")
 
 # ─── 사이드바 입력 ────────────────────────────────────────────────
 with st.sidebar:
@@ -136,7 +246,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🔍 개발자 정보")
-    st.markdown("태권도 품새 자세 분석 시스템 – Optimized")
+    st.markdown("태권도 품새 자세 분석 시스템 ")
     st.markdown("© 2025 Taekwondo AI Team")
 
 # ────────────────────────────────────────────────────────────────
@@ -272,7 +382,7 @@ def show_result_page(
     # KPI 카드
     kpi1, kpi2, kpi3 = st.columns(3)
     with kpi1:
-        st.metric("예측 클래스", best_lbl)
+        st.metric("유사도 예측 클래스", best_lbl)
     with kpi2:
         st.metric("전체 유사도", f"{best_score:.1f}%")
     if transformer_results:
@@ -282,7 +392,7 @@ def show_result_page(
     st.image(img_pil, caption="업로드 이미지", use_container_width=True)
 
     # 상위 5개 랭킹 표
-    st.subheader("상위 5개 클래스")
+    st.subheader("유사도 상위 5개 클래스")
     rank_df = pd.DataFrame(ranked[:5], columns=["클래스", "유사도(%)"])
     st.bar_chart(rank_df.set_index("클래스"))
 
@@ -329,19 +439,22 @@ def show_result_page(
             if show_heatmap:
                 with tabs[1]:
                     ref_data = ref_kps_dict[best_lbl]
-
-                    # 배열 차원 확인 및 적절히 처리
-                    if len(ref_data.shape) == 1:
-                        if len(ref_data) % 2 == 0:
-                            # x, y 쌍으로 reshape
-                            num_points = len(ref_data) // 2
-                            ref_data = ref_data.reshape(num_points, 2)
+                    if isinstance(ref_data, list):
+                        ref_data = np.array(ref_data)
+                    if ref_data.ndim == 1:
+                        if ref_data.size == 33*2:
+                            ref_data = ref_data.reshape(33, 2).astype(np.float32)
                         else:
                             st.warning("참조 키포인트 형식이 잘못되었습니다. 히트맵을 표시할 수 없습니다.")
                             return
-
-                    heat = create_similarity_heatmap(user_pts, ref_data)
-                    st.pyplot(heat)
+                    else:
+                        ref_arr = np.array(ref_data, dtype=np.float32)
+                    #관절 각도 차이 분석
+                    fig_angle = plot_angle_deviation_heatmap(user_pts, ref_arr)
+                    st.pyplot(fig_angle, use_container_width=True)
+                    # 팔다리 대칭성 분석
+                    fig_symmetry = plot_symmetry_analysis(user_pts)
+                    st.pyplot(fig_symmetry, use_container_width=True)
 
 # 비디오 프레임 처리 함수
 def process_video_frames(video_file):
