@@ -249,8 +249,13 @@ with st.sidebar:
     show_heatmap = st.checkbox("유사도 히트맵 표시", value=False)
 
     st.markdown("---")
+    st.image(
+        "C:/Users\LG/taekwondo_forms/taekwon_form/web/춘식이.png",
+        width=32,
+    )
     st.markdown("### 🔍 개발자 정보")
-    st.markdown("태권도 품새 자세 분석 시스템 ")
+    st.markdown("퓨쳐시스템 춘식이들")
+    st.markdown("승현 왈: 깜찍이들")
     st.markdown("© 2025 Taekwondo AI Team")
 
 # ────────────────────────────────────────────────────────────────
