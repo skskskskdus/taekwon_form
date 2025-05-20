@@ -55,16 +55,19 @@ def visualize_user_and_reference(
                 cv2.line(overlay, tuple(pt1.astype(int)), tuple(pt2.astype(int)), (0, 255, 0), 2)
     return overlay
 
-def plot_pose_overlay_with_title(overlay_img, pred_label, similarity_score):
+def plot_pose_overlay_with_title(overlay_img, pred_label, similarity_score,transformer_pred_label=None):
     """포즈 오버레이 시각화에 제목과 범례를 추가합니다."""
     fig, ax = plt.subplots(figsize=(7, 6))
     ax.imshow(cv2.cvtColor(overlay_img, cv2.COLOR_BGR2RGB))
     ax.axis('off')
     
     # 제목 설정
+    title = f"유사도 기반 예측 클래스: {pred_label}\n유사도: {similarity_score:.2f}점"
+    if transformer_pred_label is not None:
+        title += f"\nTransformer 예측 클래스: {transformer_pred_label}"
     ax.set_title(
-        f"예측 동작: {pred_label}\n유사도: {similarity_score:.2f}점",
-        fontsize=17, fontweight="bold", color="#003366", loc="center", pad=25
+        title,
+        fontsize=11, fontweight="bold", color="#003366", loc="center", pad=25
     )
     
     # 범례 추가
@@ -173,6 +176,7 @@ def plot_symmetry_analysis(user_pts):
     ax1.set_aspect('equal')
     ax1.axis('off')
     ax1.set_title("포즈 대칭성 분석")
+    ax1.invert_yaxis()  # ← 이 줄 추가!: 머리부터 출력되도록ㄴ
     # 바 차트
     names = [s[0] for s in symmetry_scores]
     scores = [s[1] * 100 for s in symmetry_scores]
@@ -226,7 +230,7 @@ st.title("🥋 태권도 품새 유사도 분석")
 # ─── 사이드바 입력 ────────────────────────────────────────────────
 with st.sidebar:
     st.image(
-        "https://www.pngall.com/wp-content/uploads/2016/04/Taekwondo-Download-PNG.png",
+        "C:/Users\LG/taekwondo_forms/taekwon_form/web/태권도_아이콘.png",
         width=100,
     )
     st.markdown("## 설정")
@@ -427,16 +431,19 @@ def show_result_page(
             ref_arr[:, 0] += x_off
             ref_arr[:, 1] += y_off
 
+            transformer_pred_label = None
+            if transformer_results:
+                transformer_pred_label = transformer_results[0]
             overlay = visualize_user_and_reference(
                 padded_img, adj_user_kps, ref_arr, POSE_CONNECTIONS
             )
             fig = plot_pose_overlay_with_title(
-                overlay, pred_label=best_lbl, similarity_score=best_score
+                overlay, pred_label=best_lbl, similarity_score=best_score,transformer_pred_label=transformer_pred_label
             )
             st.pyplot(fig, use_container_width=True)
 
             
-            if show_heatmap:
+        if show_heatmap:
                 with tabs[1]:
                     ref_data = ref_kps_dict[best_lbl]
                     if isinstance(ref_data, list):
