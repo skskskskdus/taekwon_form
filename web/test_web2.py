@@ -18,14 +18,56 @@ import tempfile
 
 import matplotlib.pyplot as plt
 # 포즈 오버레이 시각화 함수 추가
+def visualize_user_and_reference(
+    img: np.ndarray,
+    user_kps: np.ndarray,
+    ref_kps: np.ndarray,
+    connections: List[Tuple[int, int]]
+) -> np.ndarray:
+    """사용자(초록색)와 유단자(빨간색) 관절을 오버레이합니다."""
+    overlay = img.copy()
+    # 사용자 관절(빨간색)
+    if user_kps.shape[0] >= max(max(i, j) for i, j in connections):
+        for x, y in user_kps:
+            if np.isfinite(x) and np.isfinite(y):
+                cv2.circle(overlay, (int(x), int(y)), 4, (0, 255, 0), -1)
+        for i, j in connections:
+            pt1 = user_kps[i]
+            pt2 = user_kps[j]
+            if np.isfinite(pt1).all() and np.isfinite(pt2).all():
+                cv2.line(overlay, tuple(pt1.astype(int)), tuple(pt2.astype(int)), (255, 0, 0), 2)
+    # 유단자 관절(초록색)
+    if ref_kps.shape[0] >= max(max(i, j) for i, j in connections):
+        for x, y in ref_kps:
+            if np.isfinite(x) and np.isfinite(y):
+                cv2.circle(overlay, (int(x), int(y)), 4, (0, 255, 0), -1)
+        for i, j in connections:
+            pt1 = ref_kps[i]
+            pt2 = ref_kps[j]
+            if np.isfinite(pt1).all() and np.isfinite(pt2).all():
+                cv2.line(overlay, tuple(pt1.astype(int)), tuple(pt2.astype(int)), (0, 255, 0), 2)
+    return overlay
+
 def plot_pose_overlay_with_title(overlay_img, pred_label, similarity_score):
+    """포즈 오버레이 시각화에 제목과 범례를 추가합니다."""
     fig, ax = plt.subplots(figsize=(7, 6))
     ax.imshow(cv2.cvtColor(overlay_img, cv2.COLOR_BGR2RGB))
     ax.axis('off')
+    
+    # 제목 설정
     ax.set_title(
         f"예측 동작: {pred_label}\n유사도: {similarity_score:.2f}점",
         fontsize=17, fontweight="bold", color="#003366", loc="center", pad=25
     )
+    
+    # 범례 추가
+    legend_elements = [
+        plt.Line2D([0], [0], color='green', lw=2, label='유단자 관절'),
+        plt.Line2D([0], [0], color='red', lw=2, label='사용자 관절')
+    ]
+    ax.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, -0.05),
+             ncol=2, frameon=True, fontsize=10)
+    
     plt.tight_layout()
     return fig
 
@@ -113,6 +155,9 @@ def _prepare_ref_bank(ref_dict: Dict[str, List[np.ndarray]]):
 
 def cosine_max_similarity(user_vec: np.ndarray, ref_vecs: np.ndarray) -> float:
     """numpy 벡터 연산으로 ref_vecs 행렬과 user_vec 간 최대 코사인 유사도 반환"""
+    if ref_vecs.ndim == 1:
+        ref_vecs = ref_vecs.reshape(1, -1)  # 단일 벡터를 2D로 변환
+    
     dot = ref_vecs @ user_vec
     denom = (np.linalg.norm(ref_vecs, axis=1) * np.linalg.norm(user_vec) + 1e-8)
     sims = dot / denom
@@ -241,61 +286,57 @@ def show_result_page(
             padded_img, adj_user_kps, scale, x_off, y_off = pad_to_1920x1080_with_keypoint_adjustment(
                 cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR), user_pts
             )
-             # 참조 키포인트 배열 가져오기
-            ref_data = ref_kps_dict[best_lbl][0]
+            # 참조 키포인트 배열 가져오기
+            ref_data = ref_kps_dict[best_lbl]
             
-             # 배열 차원 확인 및 적절히 처리
+            # 배열 차원 확인 및 적절히 처리
             print(f"Debug: ref_data shape = {ref_data.shape}")
             
-            # 1차원 배열인 경우 2차원으로 reshape
-            if len(ref_data.shape) == 1:
-                # 길이가 짝수인지 확인
-                if len(ref_data) % 2 == 0:
-                    # x, y 쌍으로 reshape
-                    num_points = len(ref_data) // 2
-                    ref_arr = ref_data.reshape(num_points, 2)
+            if isinstance(ref_data, list):
+                ref_data = np.array(ref_data)
+            if ref_data.ndim == 1:
+                if ref_data.size == 33*2:
+                    ref_arr = ref_data.reshape(33, 2).astype(np.float32)
                 else:
-                    # 오류 처리
                     st.warning("참조 키포인트 형식이 잘못되었습니다. 오버레이를 표시할 수 없습니다.")
                     return
             else:
                 ref_arr = np.array(ref_data, dtype=np.float32)
-                
-            # 나머지 코드 계속 진행
+            
             if ref_arr.max() <= 1.5:
                 ref_arr[:, 0] *= orig_w
                 ref_arr[:, 1] *= orig_h
-                
             ref_arr *= scale
             ref_arr[:, 0] += x_off
             ref_arr[:, 1] += y_off
+
             overlay = visualize_user_and_reference(
                 padded_img, adj_user_kps, ref_arr, POSE_CONNECTIONS
             )
             fig = plot_pose_overlay_with_title(
-            overlay, pred_label=best_lbl, similarity_score=best_score
-        )
-        st.pyplot(fig, use_container_width=True)
-            #st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True)
-        
-        if show_heatmap:
-            with tabs[1]:
-                ref_data = ref_kps_dict[best_lbl][0]
+                overlay, pred_label=best_lbl, similarity_score=best_score
+            )
+            st.pyplot(fig, use_container_width=True)
 
-                # 배열 차원 확인 및 적절히 처리
-                if len(ref_data.shape) == 1:
-                    if len(ref_data) % 2 == 0:
-                        # x, y 쌍으로 reshape
-                        num_points = len(ref_data) // 2
-                        ref_data = ref_data.reshape(num_points, 2)
-                    else:
-                        st.warning("참조 키포인트 형식이 잘못되었습니다. 히트맵을 표시할 수 없습니다.")
-                        return
+            
+            if show_heatmap:
+                with tabs[1]:
+                    ref_data = ref_kps_dict[best_lbl]
 
-                heat = create_similarity_heatmap(user_pts, ref_data)
-                st.pyplot(heat)
+                    # 배열 차원 확인 및 적절히 처리
+                    if len(ref_data.shape) == 1:
+                        if len(ref_data) % 2 == 0:
+                            # x, y 쌍으로 reshape
+                            num_points = len(ref_data) // 2
+                            ref_data = ref_data.reshape(num_points, 2)
+                        else:
+                            st.warning("참조 키포인트 형식이 잘못되었습니다. 히트맵을 표시할 수 없습니다.")
+                            return
 
-# 비디오 프레임 처리 함수 추가
+                    heat = create_similarity_heatmap(user_pts, ref_data)
+                    st.pyplot(heat)
+
+# 비디오 프레임 처리 함수
 def process_video_frames(video_file):
     """비디오 파일에서 프레임을 추출하고 키포인트를 분석합니다."""
     # 임시 파일로 저장
@@ -317,9 +358,12 @@ def process_video_frames(video_file):
         
         # 키포인트 추출
         img_pil = Image.fromarray(frame_rgb)
-        kpts = extract_keypoints(img_pil)
-        if kpts is not None:
-            keypoints_list.append(kpts)
+        try:
+            kpts = extract_keypoints(img_pil)
+            if kpts is not None:
+                keypoints_list.append(kpts)
+        except:
+            pass  # 키포인트를 추출할 수 없는 프레임은 무시
     
     cap.release()
     os.unlink(tfile.name)  # 임시 파일 삭제
