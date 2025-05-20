@@ -14,6 +14,7 @@ import numpy as np
 import cv2
 import time
 from typing import Dict, List, Tuple
+import tempfile
 
 import matplotlib.pyplot as plt
 # 포즈 오버레이 시각화 함수 추가
@@ -177,11 +178,24 @@ def get_assets(json_dir: str, pth_path: str):
 # ────────────────────────────────────────────────────────────────
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    uploaded = st.file_uploader(
-        "📷 사용자 이미지 업로드",
-        type=["png", "jpg", "jpeg"],
-        help="분석할 태권도 동작 이미지를 업로드하세요",
-    )
+    mode = st.radio("입력 소스 선택", ['이미지 업로드', '웹캠', '비디오'], key="inp_mode")
+    
+    if mode == '이미지 업로드':
+        uploaded = st.file_uploader(
+            "📷 사용자 이미지 업로드",
+            type=["png", "jpg", "jpeg"],
+            help="분석할 태권도 동작 이미지를 업로드하세요",
+        )
+    elif mode == '웹캠':
+        uploaded = st.camera_input("📷 웹캠 캡처", help="웹캠으로 태권도 동작을 캡처하세요")
+    else:  # 비디오 업로드
+        uploaded = st.file_uploader(
+            "🎥 비디오 업로드",
+            type=["mp4"],
+            help="분석할 태권도 동작 비디오를 업로드하세요",
+        )
+        if uploaded:
+            st.video(uploaded)
 
 # ────────────────────────────────────────────────────────────────
 # 보조 함수: 결과 페이지 (UI 분리)
@@ -281,6 +295,36 @@ def show_result_page(
                 heat = create_similarity_heatmap(user_pts, ref_data)
                 st.pyplot(heat)
 
+# 비디오 프레임 처리 함수 추가
+def process_video_frames(video_file):
+    """비디오 파일에서 프레임을 추출하고 키포인트를 분석합니다."""
+    # 임시 파일로 저장
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(video_file.read())
+    
+    cap = cv2.VideoCapture(tfile.name)
+    frames = []
+    keypoints_list = []
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # BGR에서 RGB로 변환
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(frame_rgb)
+        
+        # 키포인트 추출
+        img_pil = Image.fromarray(frame_rgb)
+        kpts = extract_keypoints(img_pil)
+        if kpts is not None:
+            keypoints_list.append(kpts)
+    
+    cap.release()
+    os.unlink(tfile.name)  # 임시 파일 삭제
+    
+    return frames, keypoints_list
 
 # ────────────────────────────────────────────────────────────────
 # 메인 프로세스
@@ -291,12 +335,26 @@ if uploaded and json_dir and pth_path:
         ref_kps_dict, ref_bank, transformer = get_assets(json_dir, pth_path)
 
     try:
-        img_pil = Image.open(uploaded).convert("RGB")
-        np_img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-        orig_h, orig_w = np_img.shape[:2]
+        if mode == '비디오':
+            frames, keypoints_list = process_video_frames(uploaded)
+            if not keypoints_list:
+                st.error("비디오에서 키포인트를 추출할 수 없습니다.")
+                st.stop()
+                
+            # 첫 번째 프레임으로 분석 수행
+            img_pil = Image.fromarray(frames[0])
+            user_pts = keypoints_list[0]
+            np_img = frames[0]
+            orig_h, orig_w = np_img.shape[:2]
+            
+            # 비디오 플레이어 표시
+            st.video(uploaded)
+        else:
+            img_pil = Image.open(uploaded).convert("RGB")
+            np_img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+            orig_h, orig_w = np_img.shape[:2]
+            user_pts = extract_keypoints(img_pil)
 
-        # ─── 사용자 키포인트 추출
-        user_pts = extract_keypoints(img_pil)
         if user_pts is None or len(user_pts) == 0:
             st.error("이미지에서 키포인트를 추출할 수 없습니다. 다른 이미지를 시도해보세요.")
             st.stop()
