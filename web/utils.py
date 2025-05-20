@@ -10,6 +10,18 @@ import matplotlib.pyplot as plt
 
 from model import PoseTransformer
 
+# --- 유사도 함수에 필요한 추가 import ---
+from scipy.spatial.distance import cdist
+from scipy.spatial import procrustes
+from scipy.spatial.distance import directed_hausdorff
+from scipy.stats import wasserstein_distance
+
+# --- DTW 관련 (optional) ---
+try:
+    from fastdtw import fastdtw
+except ImportError:
+    fastdtw = None
+
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
 
@@ -119,50 +131,32 @@ def pad_to_1920x1080_with_keypoint_adjustment(image: np.ndarray, keypoints: np.n
     adjusted_keypoints[:, 1] += y_offset
     return padded_img, adjusted_keypoints, scale, x_offset, y_offset
 
-# [**여기서부터 아래가 수정된 부분**]
 def visualize_user_and_reference(user_image: np.ndarray, user_keypoints: np.ndarray, reference_keypoints: np.ndarray, connections):
-    # 입력 데이터 전처리 및 형식 변환
     reference_keypoints = np.array(reference_keypoints, dtype=np.float32)
     user_keypoints = np.array(user_keypoints, dtype=np.float32)
-    
-    # 배열 형태 표준화 (1, N, 2) -> (N, 2)
     if len(reference_keypoints.shape) == 3 and reference_keypoints.shape[0] == 1:
         reference_keypoints = reference_keypoints[0]
     if len(reference_keypoints.shape) == 1 and reference_keypoints.size % 2 == 0:
         reference_keypoints = reference_keypoints.reshape((-1, 2))
-    
-    # 디버깅 정보 출력
-    print(f"User keypoints shape: {user_keypoints.shape}")
-    print(f"Reference keypoints shape: {reference_keypoints.shape}")
-    
     image = user_image.copy()
-    
-    # 사용자 키포인트 연결선 그리기 (녹색)
     for i, j in connections:
         if i < len(user_keypoints) and j < len(user_keypoints):
             pt1 = tuple(map(int, user_keypoints[i]))
             pt2 = tuple(map(int, user_keypoints[j]))
             if np.isfinite(pt1).all() and np.isfinite(pt2).all():
                 cv2.line(image, pt1, pt2, (0, 255, 0), 3)
-    
-    # 참조 키포인트 연결선 그리기 (빨간색)
     for i, j in connections:
         if i < len(reference_keypoints) and j < len(reference_keypoints):
             pt1 = tuple(map(int, reference_keypoints[i]))
             pt2 = tuple(map(int, reference_keypoints[j]))
             if np.isfinite(pt1).all() and np.isfinite(pt2).all():
-                cv2.line(image, pt1, pt2, (0, 0, 255), 3)  # 빨간색 연결선
-    
-    # 사용자 키포인트 점 그리기 (녹색)
+                cv2.line(image, pt1, pt2, (0, 0, 255), 3)
     for x, y in user_keypoints:
         if np.isfinite(x) and np.isfinite(y):
             cv2.circle(image, (int(x), int(y)), 6, (0, 255, 0), -1)
-    
-    # 참조 키포인트 점 그리기 (빨간색)
     for x, y in reference_keypoints:
         if np.isfinite(x) and np.isfinite(y):
-            cv2.circle(image, (int(x), int(y)), 6, (0, 0, 255), -1)  # 빨간색 점
-    
+            cv2.circle(image, (int(x), int(y)), 6, (0, 0, 255), -1)
     return image
 
 KEY_JOINTS = {
@@ -185,31 +179,22 @@ def get_joint_weights(num_joints=33):
 
 def normalize_pose(keypoints):
     kp = np.array(keypoints).copy()
-    # 1D 벡터 (예: (66,)) → (33, 2)
     if len(kp.shape) == 1 and kp.size % 2 == 0:
-        kp = kp.reshape((-1, 2))  # 유연하게 reshape
-    # (1, 33, 2) → (33, 2)
+        kp = kp.reshape((-1, 2))
     if len(kp.shape) == 3 and kp.shape[0] == 1:
         kp = kp[0]
-        
-    # 적은 수의 키포인트 처리 대응 (수정 부분)
     if kp.shape[0] < 13:
-        print(f"Warning: 키포인트 수가 적음 ({kp.shape[0]}). 임시 정규화 방법 사용")
-        # 적은 키포인트에 대한 대체 정규화 방법
-        if kp.shape[0] >= 2:  # 최소 2개 이상의 키포인트가 있는 경우
+        if kp.shape[0] >= 2:
             center = np.mean(kp, axis=0)
             kp -= center
-            scale = np.max(np.linalg.norm(kp, axis=1)) + 1e-8  # 최대 거리로 정규화
+            scale = np.max(np.linalg.norm(kp, axis=1)) + 1e-8
             kp /= scale
             return kp
         else:
-            # 키포인트가 너무 적어 정규화가 불가능한 경우
-            return kp  # 원본 반환
-    
-    # 기존 정규화 방법 (키포인트가 충분히 많은 경우)
-    center = (kp[11] + kp[12]) / 2  # 어깨 중심
+            return kp
+    center = (kp[11] + kp[12]) / 2
     kp -= center
-    scale = np.linalg.norm(kp[11] - kp[12]) + 1e-8  # 어깨 폭
+    scale = np.linalg.norm(kp[11] - kp[12]) + 1e-8
     if scale > 0:
         kp /= scale
     return kp
@@ -225,8 +210,6 @@ def extract_class_from_filename(filename):
 def create_similarity_heatmap(user_kp, ref_kp):
     user_kp = np.array(user_kp)
     ref_kp = np.array(ref_kp)
-    
-    # 형태 변환
     if len(user_kp.shape) == 1 and user_kp.size % 2 == 0:
         user_kp = user_kp.reshape((-1, 2))
     if len(ref_kp.shape) == 1 and ref_kp.size % 2 == 0:
@@ -235,26 +218,16 @@ def create_similarity_heatmap(user_kp, ref_kp):
         user_kp = user_kp[0]
     if len(ref_kp.shape) == 3 and ref_kp.shape[0] == 1:
         ref_kp = ref_kp[0]
-
-    # 키포인트 개수가 부족한 경우 간소화된 히트맵 생성
     if user_kp.shape[0] < 13 or ref_kp.shape[0] < 13:
-        print(f"Warning: 키포인트 수가 적음 (사용자: {user_kp.shape[0]}, 참조: {ref_kp.shape[0]})")
-        # 사용 가능한 공통 키포인트만 선택
         min_joints = min(user_kp.shape[0], ref_kp.shape[0])
         user_kp = user_kp[:min_joints]
         ref_kp = ref_kp[:min_joints]
-        
-        # 간소화된 히트맵 정보
         similarities = []
         names = [f"점{i+1}" for i in range(min_joints)]
-        
-        # 각 포인트별 유사도 계산
         for i in range(min_joints):
             dist = np.linalg.norm(user_kp[i] - ref_kp[i])
-            sim = max(0, min(1, 1 - dist / 2)) * 100  # 거리 2 이상은 0% 유사도
+            sim = max(0, min(1, 1 - dist / 2)) * 100
             similarities.append(sim)
-        
-        # 히트맵 생성
         fig, ax = plt.subplots(figsize=(10, 3))
         heatmap = ax.imshow([similarities], cmap='RdYlGn', aspect='auto', vmin=0, vmax=100)
         ax.set_xticks(np.arange(len(names)))
@@ -265,8 +238,6 @@ def create_similarity_heatmap(user_kp, ref_kp):
         plt.colorbar(heatmap, ax=ax, label="유사도 (%)")
         plt.title("키포인트별 유사도 (간소화)")
         return fig
-    
-    # 기존 코드 (충분한 키포인트가 있는 경우)
     user_norm = normalize_pose(user_kp)
     ref_norm = normalize_pose(ref_kp)
     joint_similarities = []
@@ -279,7 +250,6 @@ def create_similarity_heatmap(user_kp, ref_kp):
                      [23, 24],
                      [25, 26],
                      [27, 28, 29, 30, 31, 32]]
-    
     for indices in joint_indices:
         dists = []
         for idx in indices:
@@ -287,7 +257,6 @@ def create_similarity_heatmap(user_kp, ref_kp):
             dists.append(dist)
         sim = 1 - np.mean(dists)
         joint_similarities.append(max(0, min(1, sim)) * 100)
-    
     fig, ax = plt.subplots(figsize=(10, 3))
     heatmap = ax.imshow([joint_similarities], cmap='RdYlGn', aspect='auto', vmin=0, vmax=100)
     ax.set_xticks(np.arange(len(joint_names)))
@@ -298,3 +267,133 @@ def create_similarity_heatmap(user_kp, ref_kp):
     plt.colorbar(heatmap, ax=ax, label="유사도 (%)")
     plt.title("관절 부위별 유사도")
     return fig
+
+# -------------------------------
+#      유사도 함수 추가 부분
+# -------------------------------
+
+# 1. 거리 기반
+def similarity_euclidean(user_pts, ref_pts):
+    return 1 - np.mean(np.linalg.norm(user_pts - ref_pts, axis=1)) / np.linalg.norm([user_pts.shape[1], user_pts.shape[0]])
+
+def similarity_mahalanobis(user_pts, ref_pts):
+    V = np.cov(np.vstack([user_pts, ref_pts]).T)
+    if np.linalg.det(V) == 0:
+        return similarity_euclidean(user_pts, ref_pts)
+    VI = np.linalg.inv(V)
+    dists = [np.sqrt((u - r) @ VI @ (u - r)) for u, r in zip(user_pts, ref_pts)]
+    max_maha = max(dists) if max(dists) != 0 else 1
+    return 1 - np.mean(dists) / max_maha
+
+# 2. 각도 기반
+def similarity_joint_angle(user_pts, ref_pts):
+    def angle_3pts(a, b, c):
+        ba = a - b
+        bc = c - b
+        cos_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-8)
+        return np.clip(cos_angle, -1, 1)
+    joint_sets = [[11, 13, 15], [12, 14, 16], [23, 25, 27], [24, 26, 28]]
+    user_angles = []
+    ref_angles = []
+    for s in joint_sets:
+        if max(s) < min(len(user_pts), len(ref_pts)):
+            user_angles.append(angle_3pts(user_pts[s[0]], user_pts[s[1]], user_pts[s[2]]))
+            ref_angles.append(angle_3pts(ref_pts[s[0]], ref_pts[s[1]], ref_pts[s[2]]))
+    return 1 - np.mean(np.abs(np.array(user_angles) - np.array(ref_angles))) / np.pi
+
+# 3. 벡터 기반
+def similarity_cosine(user_pts, ref_pts):
+    v1 = user_pts.flatten()
+    v2 = ref_pts.flatten()
+    return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+
+# 4. 정렬 보정
+def similarity_procrustes(user_pts, ref_pts):
+    mtx1, mtx2, disparity = procrustes(user_pts, ref_pts)
+    return 1 - disparity
+
+# 5. 분포 간
+def similarity_hausdorff(user_pts, ref_pts):
+    d1 = directed_hausdorff(user_pts, ref_pts)[0]
+    d2 = directed_hausdorff(ref_pts, user_pts)[0]
+    maxd = max(d1, d2)
+    return 1 - maxd / (np.linalg.norm([user_pts.shape[1], user_pts.shape[0]]))
+
+def similarity_chamfer(user_pts, ref_pts):
+    dists_1 = cdist(user_pts, ref_pts)
+    chamfer = np.mean(np.min(dists_1, axis=1)) + np.mean(np.min(dists_1, axis=0))
+    norm = np.linalg.norm([user_pts.shape[1], user_pts.shape[0]])
+    return 1 - chamfer / (2 * norm)
+
+def similarity_emd(user_pts, ref_pts):
+    emd_x = wasserstein_distance(user_pts[:,0], ref_pts[:,0])
+    emd_y = wasserstein_distance(user_pts[:,1], ref_pts[:,1])
+    return 1 - (emd_x + emd_y) / (2 * np.linalg.norm([user_pts.shape[1], user_pts.shape[0]]))
+
+# 6. 시계열
+def similarity_dtw(user_pts, ref_pts):
+    if fastdtw is None:
+        return np.nan
+    dist_x, _ = fastdtw(user_pts[:,0], ref_pts[:,0])
+    dist_y, _ = fastdtw(user_pts[:,1], ref_pts[:,1])
+    dtw = (dist_x + dist_y) / 2
+    return 1 - dtw / (user_pts.shape[0])
+
+def similarity_softdtw(user_pts, ref_pts):
+    try:
+        from scipy.spatial.distance import soft_dtw
+        gamma = 1.0
+        D = cdist(user_pts, ref_pts)
+        sdtw = soft_dtw(D, gamma=gamma)
+        return 1 - sdtw / (user_pts.shape[0])
+    except:
+        return similarity_dtw(user_pts, ref_pts)
+
+# 7. 앙상블
+def similarity_ensemble(user_pts, ref_pts, weights=None):
+    methods = [
+        ('유클리드', similarity_euclidean),
+        ('마할라노비스', similarity_mahalanobis),
+        ('관절각', similarity_joint_angle),
+        ('코사인', similarity_cosine),
+        ('프로크루스테스', similarity_procrustes),
+        ('하우스도르프', similarity_hausdorff),
+        ('챔퍼', similarity_chamfer),
+        ('EMD', similarity_emd),
+        ('DTW', similarity_dtw),
+        ('Soft-DTW', similarity_softdtw)
+    ]
+    results = []
+    for name, func in methods:
+        try:
+            score = float(func(user_pts, ref_pts))
+        except Exception as e:
+            score = float('nan')
+        results.append((name, score))
+    arr = np.array([v for _, v in results if not np.isnan(v)])
+    if arr.size == 0:
+        return 0, results, None
+    if weights is None:
+        weights = np.ones(arr.shape) / len(arr)
+    else:
+        weights = np.array(weights)
+        weights = weights / np.sum(weights)
+    ensemble_score = np.sum(arr * weights[:len(arr)])
+    max_idx = np.nanargmax(arr)
+    best_method = [name for name, v in results if not np.isnan(v)][max_idx]
+    return ensemble_score, results, best_method
+
+# 유사도 함수 사전
+SIMILARITY_METHODS = {
+    "유클리드": similarity_euclidean,
+    "마할라노비스": similarity_mahalanobis,
+    "관절각": similarity_joint_angle,
+    "코사인": similarity_cosine,
+    "프로크루스테스": similarity_procrustes,
+    "하우스도르프": similarity_hausdorff,
+    "챔퍼": similarity_chamfer,
+    "EMD": similarity_emd,
+    "DTW": similarity_dtw,
+    "Soft-DTW": similarity_softdtw,
+    "앙상블": similarity_ensemble
+}
