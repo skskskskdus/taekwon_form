@@ -403,16 +403,14 @@ def show_result_page(
     # 포즈 오버레이 & 히트맵
     if show_overlay or show_heatmap:
         tabs = st.tabs(["포즈 오버레이", "관절별 히트맵"])
+
+    with tabs[0]:
         if show_overlay:
+            # 기존의 포즈 오버레이 시각화 코드
             padded_img, adj_user_kps, scale, x_off, y_off = pad_to_1920x1080_with_keypoint_adjustment(
                 cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR), user_pts
             )
-            # 참조 키포인트 배열 가져오기
             ref_data = ref_kps_dict[best_lbl]
-            
-            # 배열 차원 확인 및 적절히 처리
-            print(f"Debug: ref_data shape = {ref_data.shape}")
-            
             if isinstance(ref_data, list):
                 ref_data = np.array(ref_data)
             if ref_data.ndim == 1:
@@ -423,7 +421,6 @@ def show_result_page(
                     return
             else:
                 ref_arr = np.array(ref_data, dtype=np.float32)
-            
             if ref_arr.max() <= 1.5:
                 ref_arr[:, 0] *= orig_w
                 ref_arr[:, 1] *= orig_h
@@ -438,30 +435,29 @@ def show_result_page(
                 padded_img, adj_user_kps, ref_arr, POSE_CONNECTIONS
             )
             fig = plot_pose_overlay_with_title(
-                overlay, pred_label=best_lbl, similarity_score=best_score,transformer_pred_label=transformer_pred_label
+                overlay, pred_label=best_lbl, similarity_score=best_score, transformer_pred_label=transformer_pred_label
             )
             st.pyplot(fig, use_container_width=True)
 
-            
+    with tabs[1]:
         if show_heatmap:
-                with tabs[1]:
-                    ref_data = ref_kps_dict[best_lbl]
-                    if isinstance(ref_data, list):
-                        ref_data = np.array(ref_data)
-                    if ref_data.ndim == 1:
-                        if ref_data.size == 33*2:
-                            ref_data = ref_data.reshape(33, 2).astype(np.float32)
-                        else:
-                            st.warning("참조 키포인트 형식이 잘못되었습니다. 히트맵을 표시할 수 없습니다.")
-                            return
-                    else:
-                        ref_arr = np.array(ref_data, dtype=np.float32)
-                    #관절 각도 차이 분석
-                    fig_angle = plot_angle_deviation_heatmap(user_pts, ref_arr)
-                    st.pyplot(fig_angle, use_container_width=True)
-                    # 팔다리 대칭성 분석
-                    fig_symmetry = plot_symmetry_analysis(user_pts)
-                    st.pyplot(fig_symmetry, use_container_width=True)
+            ref_data = ref_kps_dict[best_lbl]
+            if isinstance(ref_data, list):
+                ref_data = np.array(ref_data)
+            if ref_data.ndim == 1:
+                if ref_data.size == 33*2:
+                    ref_arr = ref_data.reshape(33, 2).astype(np.float32)
+                else:
+                    st.warning("참조 키포인트 형식이 잘못되었습니다. 히트맵을 표시할 수 없습니다.")
+                    return
+            else:
+                ref_arr = np.array(ref_data, dtype=np.float32)
+            # 관절 각도 차이 분석
+            fig_angle = plot_angle_deviation_heatmap(user_pts, ref_arr)
+            st.pyplot(fig_angle, use_container_width=True)
+            # 팔다리 대칭성 분석
+            fig_symmetry = plot_symmetry_analysis(user_pts)
+            st.pyplot(fig_symmetry, use_container_width=True)
 
 # 비디오 프레임 처리 함수
 def process_video_frames(video_file):
