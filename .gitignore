@@ -4,7 +4,7 @@
 /.ipynb_checkpoints
 /output_vis
 /blackbelt_H
-
+/joint_point_dataset
 __pycache__
 /logs
 /sample
